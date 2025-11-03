@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Job Helper - Quick Copy Fields",
+  "version": "1.0",
+  "description": "Select or copy a field name (e.g. 'Country') and get a quick copyable value from your profile.",
+  "permissions": ["storage", "scripting", "activeTab", "clipboardWrite"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "128": "icons/favicon.png"
+    }
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "content.js"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Job Helper</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 12px;
+        min-width: 200px;
+      }
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+      button {
+        padding: 6px 10px;
+        font-size: 14px;
+        border-radius: 6px;
+        border: none;
+        cursor: pointer;
+        background: #1976d2;
+        color: #fff;
+      }
+      button:hover {
+        background: #125aa0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toggle-row">
+      <label for="ext-toggle">Extension</label>
+      <input type="checkbox" id="ext-toggle" />
+    </div>
+    <button id="edit-profile">Edit Profile</button>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

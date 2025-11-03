@@ -1,0 +1,5 @@
+body { font-family: Arial, sans-serif; margin: 0; padding: 12px; width: 300px; }
+.container h3 { margin: 0 0 10px 0; }
+.field { display:flex; align-items:center; justify-content:space-between; margin:6px 0; }
+.field button { margin-left:8px; }
+.footer { margin-top:10px; text-align:right; }
