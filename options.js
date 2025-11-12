@@ -1,11 +1,15 @@
-// options.js (sync version without resume)
+// options.js (sync + fallback + export/import)
 
 const form = document.getElementById("profileForm");
 const saveBtn = document.getElementById("save");
 const addFieldBtn = document.getElementById("addField");
 const statusEl = document.getElementById("status");
 
-// --- Helper: safe storage set with fallback to local ---
+// New buttons
+const exportBtn = document.getElementById("exportProfile");
+const importBtn = document.getElementById("importProfile");
+
+// --- Helper: safe set/get with sync fallback ---
 async function safeSetProfile(profile) {
   try {
     await chrome.storage.sync.set({ profile });
@@ -14,13 +18,11 @@ async function safeSetProfile(profile) {
   } catch (err) {
     console.warn("Sync storage failed, falling back to local:", err);
     await chrome.storage.local.set({ profile });
-    statusEl.textContent = "⚠️ Saved locally (sync quota exceeded)";
+    statusEl.textContent = "⚠️ Saved locally (sync quota exceeded or disabled)";
   }
-
-  setTimeout(() => (statusEl.textContent = ""), 2000);
+  setTimeout(() => (statusEl.textContent = ""), 2500);
 }
 
-// --- Helper: safe storage get with fallback ---
 async function safeGetProfile() {
   return new Promise((resolve) => {
     chrome.storage.sync.get("profile", (syncData) => {
@@ -39,10 +41,7 @@ async function safeGetProfile() {
 // --- Render form dynamically ---
 function renderForm(profile = {}) {
   form.innerHTML = ""; // clear old content
-
-  Object.keys(profile).forEach((key) => {
-    addFieldRow(key, profile[key]);
-  });
+  Object.keys(profile).forEach((key) => addFieldRow(key, profile[key]));
 }
 
 // --- Add a new field row ---
@@ -82,13 +81,55 @@ saveBtn.addEventListener("click", async () => {
     const value = valueInput.value.trim();
     if (key) profile[key] = value;
   });
-
   await safeSetProfile(profile);
 });
 
 // --- Add new empty field ---
-addFieldBtn.addEventListener("click", () => {
-  addFieldRow();
+addFieldBtn.addEventListener("click", () => addFieldRow());
+
+// --- Export profile ---
+exportBtn.addEventListener("click", async () => {
+  const profile = await safeGetProfile();
+  const blob = new Blob([JSON.stringify(profile, null, 2)], {
+    type: "application/json"
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "job-helper-profile.json";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  statusEl.textContent = "✅ Profile exported";
+  setTimeout(() => (statusEl.textContent = ""), 2000);
+});
+
+// --- Import profile ---
+importBtn.addEventListener("click", () => {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "application/json";
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const importedProfile = JSON.parse(text);
+      if (typeof importedProfile !== "object" || Array.isArray(importedProfile)) {
+        throw new Error("Invalid profile format");
+      }
+      await safeSetProfile(importedProfile);
+      renderForm(importedProfile);
+      statusEl.textContent = "✅ Profile imported successfully";
+      setTimeout(() => (statusEl.textContent = ""), 2500);
+    } catch (err) {
+      console.error("Import failed:", err);
+      statusEl.textContent = "❌ Failed to import (invalid file)";
+      setTimeout(() => (statusEl.textContent = ""), 3000);
+    }
+  };
+  input.click();
 });
 
 // --- Load saved profile (on page open) ---
@@ -97,7 +138,6 @@ addFieldBtn.addEventListener("click", () => {
   if (Object.keys(profile).length) {
     renderForm(profile);
   } else {
-    // Default starter fields
     renderForm({
       name: "",
       email: "",
