@@ -1,11 +1,42 @@
-// options.js
+// options.js (sync version without resume)
 
 const form = document.getElementById("profileForm");
 const saveBtn = document.getElementById("save");
 const addFieldBtn = document.getElementById("addField");
 const statusEl = document.getElementById("status");
 
-// --- Render fields dynamically ---
+// --- Helper: safe storage set with fallback to local ---
+async function safeSetProfile(profile) {
+  try {
+    await chrome.storage.sync.set({ profile });
+    console.log("Profile saved to sync storage ✅");
+    statusEl.textContent = "✅ Profile synced to Google account";
+  } catch (err) {
+    console.warn("Sync storage failed, falling back to local:", err);
+    await chrome.storage.local.set({ profile });
+    statusEl.textContent = "⚠️ Saved locally (sync quota exceeded)";
+  }
+
+  setTimeout(() => (statusEl.textContent = ""), 2000);
+}
+
+// --- Helper: safe storage get with fallback ---
+async function safeGetProfile() {
+  return new Promise((resolve) => {
+    chrome.storage.sync.get("profile", (syncData) => {
+      if (chrome.runtime.lastError || !syncData.profile) {
+        console.warn("Sync unavailable, reading from local storage");
+        chrome.storage.local.get("profile", (localData) => {
+          resolve(localData.profile || {});
+        });
+      } else {
+        resolve(syncData.profile);
+      }
+    });
+  });
+}
+
+// --- Render form dynamically ---
 function renderForm(profile = {}) {
   form.innerHTML = ""; // clear old content
 
@@ -14,7 +45,7 @@ function renderForm(profile = {}) {
   });
 }
 
-// --- Add a new row for a field ---
+// --- Add a new field row ---
 function addFieldRow(key = "", value = "") {
   const wrapper = document.createElement("div");
   wrapper.className = "field";
@@ -41,67 +72,32 @@ function addFieldRow(key = "", value = "") {
   form.appendChild(wrapper);
 }
 
-// --- Save profile data ---
-saveBtn.addEventListener("click", () => {
+// --- Save profile ---
+saveBtn.addEventListener("click", async () => {
   const fields = form.querySelectorAll(".field");
   const profile = {};
   fields.forEach((f) => {
     const [keyInput, valueInput] = f.querySelectorAll("input");
     const key = keyInput.value.trim().toLowerCase();
     const value = valueInput.value.trim();
-    if (key) {
-      profile[key] = value;
-    }
+    if (key) profile[key] = value;
   });
 
-  chrome.storage.local.set({ profile }, () => {
-    statusEl.textContent = "......Saved!";
-    setTimeout(() => (statusEl.textContent = ""), 1500);
-  });
+  await safeSetProfile(profile);
 });
-
-const resumeUpload = document.getElementById("resume-upload");
-const resumeStatus = document.getElementById("resume-status");
-
-resumeUpload.addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-  reader.onload = () => {
-    const base64 = reader.result.split(",")[1];
-    chrome.storage.local.set({
-      resume: {
-        name: file.name,
-        type: file.type,
-        data: base64
-      }
-    }, () => {
-      resumeStatus.textContent = `Saved: ${file.name}`;
-    });
-  };
-  reader.readAsDataURL(file);
-});
-
-// Load status on page open
-chrome.storage.local.get("resume", ({ resume }) => {
-  if (resume) {
-    resumeStatus.textContent = `Saved: ${resume.name}`;
-  }
-});
-
 
 // --- Add new empty field ---
 addFieldBtn.addEventListener("click", () => {
   addFieldRow();
 });
 
-// --- Load saved profile ---
-chrome.storage.local.get("profile", ({ profile }) => {
-  if (profile) {
+// --- Load saved profile (on page open) ---
+(async () => {
+  const profile = await safeGetProfile();
+  if (Object.keys(profile).length) {
     renderForm(profile);
   } else {
-    // default initial fields
+    // Default starter fields
     renderForm({
       name: "",
       email: "",
@@ -111,4 +107,4 @@ chrome.storage.local.get("profile", ({ profile }) => {
       github: ""
     });
   }
-});
+})();

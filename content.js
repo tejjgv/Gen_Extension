@@ -1,3 +1,4 @@
+// content.js (updated)
 // --- Field aliases (simple fuzzy match) ---
 const KEY_ALIASES = {
   name: ["name", "full name"],
@@ -5,39 +6,101 @@ const KEY_ALIASES = {
   phone: ["phone", "phone number", "mobile"],
   country: ["country", "nationality"],
   linkedin: ["linkedin", "linkedin profile"],
-  github: ["github", "github profile"],
-  resume: ["resume", "cv"]
+  github: ["github", "github profile"]
 };
 
+// normalize helper
 function normalize(text) {
-  return text.replace(/[^a-z0-9 ]/gi, "").trim().toLowerCase();
+  return String(text || "").replace(/[^a-z0-9 ]/gi, "").trim().toLowerCase();
 }
 
+// Improved findKeyForText (exact -> alias -> fuzzy)
 function findKeyForText(text, profile) {
   const n = normalize(text);
 
-  // First check direct profile keys (including user-added fields)
+  // 1️⃣ Check exact match in profile keys
   if (profile) {
     for (const key in profile) {
       const nk = normalize(key);
+      if (n === nk) return key; // exact match wins
+    }
+  }
+
+  // 2️⃣ Check alias matches first (more reliable)
+  for (const [key, aliases] of Object.entries(KEY_ALIASES)) {
+    for (const alias of aliases) {
+      const normalizedAlias = normalize(alias);
+      // Exact or word boundary match
+      try {
+        if (
+          n === normalizedAlias ||
+          new RegExp(`\\b${normalizedAlias}\\b`).test(n)
+        ) {
+          return key;
+        }
+      } catch (e) {
+        // Fallback (regex could fail on weird alias) -> simple equality
+        if (n === normalizedAlias) return key;
+      }
+    }
+  }
+
+  // 3️⃣ Fallback: fuzzy partial match (last resort)
+  if (profile) {
+    for (const key in profile) {
+      const nk = normalize(key);
+      if (!nk) continue;
       if (n.includes(nk) || nk.includes(n)) {
         return key;
       }
     }
   }
 
-  // Then check if the text matches any alias
-  for (const [key, aliases] of Object.entries(KEY_ALIASES)) {
-    for (const alias of aliases) {
-      const normalizedAlias = normalize(alias);
-      if (n === normalizedAlias || n.includes(normalizedAlias) || normalizedAlias.includes(n)) {
-        // Return the key (we'll handle resume separately even if not in profile)
-        return key;
-      }
-    }
-  }
-
   return null;
+}
+
+// --- Storage helper: try sync first, fallback to local ---
+// keys: array or string; cb: function(resultObj)
+function getStorage(keys, cb) {
+  // Prefer sync
+  chrome.storage.sync.get(keys, (syncRes) => {
+    const lastErr = chrome.runtime.lastError;
+    // If sync produced error OR returned nothing meaningful for requested keys, fallback to local
+    if (lastErr) {
+      // fallback
+      chrome.storage.local.get(keys, (localRes) => {
+        // clear any runtime.lastError so callers don't see leftover errors
+        // (chrome API clears it on success, but we still handle defensively)
+        cb(localRes || {});
+      });
+    } else {
+      // If user requested specific keys and syncRes doesn't contain them (undefined),
+      // we should check local to ensure we don't miss data that exists locally but not yet synced.
+      if (Array.isArray(keys)) {
+        let missing = false;
+        for (const k of keys) {
+          if (syncRes[k] === undefined) { missing = true; break; }
+        }
+        if (missing) {
+          // read local and merge (sync wins when present)
+          chrome.storage.local.get(keys, (localRes) => {
+            const merged = Object.assign({}, localRes || {}, syncRes || {});
+            cb(merged);
+          });
+          return;
+        }
+      } else if (typeof keys === "string") {
+        if (syncRes[keys] === undefined) {
+          chrome.storage.local.get(keys, (localRes) => {
+            cb(Object.assign({}, localRes || {}, syncRes || {}));
+          });
+          return;
+        }
+      }
+      // otherwise use sync result
+      cb(syncRes || {});
+    }
+  });
 }
 
 // --- Panel host (shadow DOM for isolation) ---
@@ -99,20 +162,6 @@ function renderPanel(key, value) {
         font-size: 16px;
       }
       .status { font-size:12px; color:#2d7a2d; margin-left:6px; }
-      .resume-box {
-        margin-top:10px;
-        padding:6px;
-        border:1px dashed #aaa;
-        border-radius:6px;
-        text-align:center;
-        cursor:pointer;
-        font-size:12px;
-        background:#fafafa;
-      }
-      .resume-box:hover {
-        background:#f0f0f0;
-        border-color:#888;
-      }
     </style>
 
     <div class="panel" role="dialog" aria-label="Job Helper">
@@ -126,7 +175,6 @@ function renderPanel(key, value) {
         <button class="fill" id="jh-fill">Fill</button>
         <div class="status" id="jh-status" aria-hidden="true"></div>
       </div>
-      <div id="resume-container"></div>
     </div>
   `;
 
@@ -134,7 +182,6 @@ function renderPanel(key, value) {
   const fillBtn = panelShadow.querySelector("#jh-fill");
   const closeBtn = panelShadow.querySelector(".close");
   const statusEl = panelShadow.querySelector("#jh-status");
-  const resumeContainer = panelShadow.querySelector("#resume-container");
 
   copyBtn.onclick = async () => {
     try {
@@ -152,82 +199,6 @@ function renderPanel(key, value) {
   };
 
   closeBtn.onclick = () => hidePanel();
-
-  // --- Render resume box if the selected field is "resume" or "cv"
-  const normalizedKey = key ? key.toLowerCase() : "";
-  if (normalizedKey === "resume" || normalizedKey === "cv") {
-    chrome.storage.local.get("resume", ({ resume }) => {
-      const resumeBox = document.createElement("div");
-      resumeBox.className = "resume-box";
-
-      if (resume && resume.data) {
-        resumeBox.textContent = `📄 ${resume.name || "Resume"}`;
-        resumeBox.setAttribute("draggable", "true");
-
-        resumeBox.addEventListener("dragstart", (e) => {
-          try {
-            // Decode base64 to binary
-            const byteCharacters = atob(resume.data);
-            const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {
-              byteNumbers[i] = byteCharacters.charCodeAt(i);
-            }
-            const byteArray = new Uint8Array(byteNumbers);
-            const blob = new Blob([byteArray], { type: resume.type || "application/pdf" });
-            
-            // Create a download URL for the file
-            const url = URL.createObjectURL(blob);
-            
-            // Set drag data with download URL
-            e.dataTransfer.effectAllowed = "copy";
-            e.dataTransfer.setData("DownloadURL", `${resume.type || "application/pdf"}:${resume.name || "resume.pdf"}:${url}`);
-            
-            // Clean up URL after a delay
-            setTimeout(() => URL.revokeObjectURL(url), 100);
-          } catch (error) {
-            console.error("Error creating draggable resume:", error);
-          }
-        });
-
-        // Add click handler as alternative to drag
-        resumeBox.addEventListener("click", () => {
-          try {
-            const byteCharacters = atob(resume.data);
-            const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {
-              byteNumbers[i] = byteCharacters.charCodeAt(i);
-            }
-            const byteArray = new Uint8Array(byteNumbers);
-            const blob = new Blob([byteArray], { type: resume.type || "application/pdf" });
-            const url = URL.createObjectURL(blob);
-            
-            // Create temporary download link
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = resume.name || "resume.pdf";
-            a.style.display = "none";
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            
-            setTimeout(() => URL.revokeObjectURL(url), 100);
-            flashStatus("Downloaded", 900);
-          } catch (error) {
-            console.error("Error downloading resume:", error);
-            flashStatus("Download failed", 1400);
-          }
-        });
-
-        resumeBox.title = "Click to download or drag to upload";
-      } else {
-        resumeBox.textContent = "No resume saved";
-        resumeBox.style.cursor = "not-allowed";
-        resumeBox.title = "Upload a resume in the extension popup";
-      }
-
-      resumeContainer.appendChild(resumeBox);
-    });
-  }
 
   function flashStatus(msg, ms) {
     statusEl.textContent = msg;
@@ -283,50 +254,46 @@ function escapeHtml(str) {
 }
 
 // --- Selection listener & copy listener ---
+// On mouseup (selection)
 document.addEventListener("mouseup", () => {
   const sel = window.getSelection().toString().trim();
   if (!sel) return;
-  
-  chrome.storage.local.get(["enabled", "profile"], ({ enabled, profile }) => {
+
+  getStorage(["enabled", "profile"], ({ enabled, profile } = {}) => {
     if (enabled === false) return;
-    
-    const key = findKeyForText(sel, profile);
+
+    const key = findKeyForText(sel, profile || {});
     console.log("Selected text:", sel, "| Matched key:", key); // Debug log
-    
+
     if (key) {
-      // Check if it's in the profile first (for both hardcoded and custom fields)
       if (profile && profile[key]) {
         const value = profile[key];
         autoCopy(key, value);
         renderPanel(key, value);
-      }
-      // Special handling for resume only if not in profile
-      else if (key === "resume") {
-        renderPanel(key, "Resume file");
+      } else {
+        // key matched via alias but not present in profile -> show panel with empty value
+        renderPanel(key, "");
       }
     }
   });
 });
 
+// On explicit copy event (Ctrl+C)
 document.addEventListener("copy", () => {
   const sel = window.getSelection().toString().trim();
   if (!sel) return;
-  
-  chrome.storage.local.get(["enabled", "profile"], ({ enabled, profile }) => {
+
+  getStorage(["enabled", "profile"], ({ enabled, profile } = {}) => {
     if (enabled === false) return;
-    
-    const key = findKeyForText(sel, profile);
-    
+
+    const key = findKeyForText(sel, profile || {});
     if (key) {
-      // Check if it's in the profile first (for both hardcoded and custom fields)
       if (profile && profile[key]) {
         const value = profile[key];
         autoCopy(key, value);
         renderPanel(key, value);
-      }
-      // Special handling for resume only if not in profile
-      else if (key === "resume") {
-        renderPanel(key, "Resume file");
+      } else {
+        renderPanel(key, "");
       }
     }
   });
