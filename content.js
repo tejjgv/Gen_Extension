@@ -171,7 +171,7 @@ function renderPanel(key, value) {
       </div>
       <div class="value">${escapeHtml(value || "(empty)")}</div>
       <div class="actions">
-        <button class="copy" id="jh-copy">Copy</button>
+        <button class="copy" id="jh-copy">Copied!</button>
         <button class="fill" id="jh-fill">Fill</button>
         <div class="status" id="jh-status" aria-hidden="true"></div>
       </div>
